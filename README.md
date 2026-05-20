@@ -300,6 +300,68 @@ PERSONALITY_LABELS = {..., "carp": {"name": "Carp",
 
 ---
 
+## 给 AI 助手的上手提示词
+
+如果你用 Cursor / Claude Code / Codex / Copilot Chat 之类的编程助手协助开发这个项目，
+把下面这段当 system prompt 或粘到对话开头，能让它快速进入状态：
+
+````
+你正在协助开发一个本地运行的 3-handed NLHE 德州扑克训练工具。架构如下：
+
+【核心数据流】
+浏览器 → POST /api/action → FastAPI 把动作 apply 到内存里的 GameState →
+  如果下一个 to_act 是 AI → 浏览器自动 POST /api/ai-act →
+  后端把"该 AI 视角的 GameState"打包成 prompt → 调用 LLM → 解析 JSON 决策 →
+  apply 到 GameState → 返回新状态。每个 AI 决策是一次独立、无状态的 LLM 调用。
+
+【文件分工】（backend/）
+- game.py        纯德扑引擎。零 I/O、零 LLM。所有规则、合法性校验、摊牌评估都在这里。
+                 测试这层用单元测试就行，别启动整个 server。
+- personalities.py  4 种对手的 system prompt（NIT / GTO / LAG / STATION）。
+                    加新对手只改这里 + PERSONALITY_LABELS 字典。
+- ai_player.py   把 GameState 投影到"某个对手的视角"，组装 user prompt，
+                 通过 llm.chat() 发出去，解析 JSON 决策。**信息隔离的物理实现就在这里**——
+                 build_situation_prompt(state, seat) 只把 state.players[seat].hole_cards 写入 prompt，
+                 别的玩家的 hole_cards 不会出现在文本里。这是项目最重要的不变量。
+- llm.py         Anthropic / OpenAI provider 抽象层。chat(system, user, max_tokens) 是唯一对外接口。
+                 切换 provider 通过 LLM_PROVIDER 环境变量。
+- stats.py       从 hand_over 状态的 history 推断每手的 VPIP/PFR/3Bet/F3B/C-bet/WTSD 贡献，
+                 累加成 session 总计。纯函数，没 I/O。timeline 列表存每手快照供前端画曲线。
+- main.py        FastAPI 路由 + 静态托管。维护单一 _state 实例 + _stats tracker。
+                 用 threading.Lock 保护并发；LLM 调用放在 asyncio.to_thread 里跑。
+                 启动时通过 python-dotenv 从项目根 .env 加载环境变量。
+
+【前端】（frontend/）
+零构建。原生 HTML/CSS/Vanilla JS。app.js 用 SVG 手画折线图，没引外部图表库。
+不要建议引 React/Vue/Tailwind/Vite 等——刻意保持零依赖。
+
+【红线 / 反模式】
+1. 别在 build_situation_prompt 里塞别的玩家的 hole_cards。这破坏信息隔离，是项目的存在意义。
+2. 别让 AI 决策跨调用共享上下文。每次都是独立的一次 messages.create()。
+3. 别在 game.py 里 import 任何 LLM/HTTP/IO 相关模块。引擎要保持纯净，方便测试。
+4. 改 personalities.py 时保持中英混合风格：中文叙述 + 英文术语（c-bet / range / pot odds /
+   polarized / TPTK 等）。这是经过调试的输出风格，AI 输出会被 frontend 直接显示。
+5. 改 stats.py 推断逻辑时，每个 stat 改完都加单元测试场景（参考已有的"BB check 不算 VPIP"等）。
+   小样本下 stat 容易看起来对其实漏边界条件。
+6. 教练复盘的 prompt 必须包含引擎算好的最终成牌等级（best_hand 的输出）作为 ground truth。
+   不要让 LLM 自己评估手牌——它会把两对说成 A 高。
+7. 默认 30s 内做出贡献的"小修补"用 in-place edit；要做架构性改动先写 plan 让用户确认。
+
+【常见任务速查】
+- 加新对手：personalities.py 加 PROMPT 字符串 + PERSONALITY_LABELS 项，重启即可。
+- 加新 stat：stats.py 的 PlayerHandStats 加 num/den 字段 + compute_hand_stats 里推断 +
+  CumulativeStats.add()/.to_dict() 同步更新；前端 app.js 的 statCell 加格子。
+- 改加注尺寸快捷键：frontend/app.js 里 .quick-sizes 按钮的 data-frac。
+- 调用模型变贵：先看 _MODEL（POKER_AI_MODEL 环境变量）；可在 .env 改成 sonnet/haiku 系列。
+- bug 排查：tail /tmp/poker.log（uvicorn 日志），或直接 curl /api/state 看当前 GameState。
+
+【启动】
+cd backend && source .venv/bin/activate && uvicorn main:app --reload --port 8765
+浏览器开 http://localhost:8765/
+````
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE). 自己练习、教学、改造、二次开发都没问题，注明出处即可。
