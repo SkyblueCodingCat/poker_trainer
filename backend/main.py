@@ -18,6 +18,14 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+# Load .env from the project root before any module that reads env vars
+# (ai_player / llm) gets imported. Existing shell vars take precedence.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+except ImportError:
+    pass  # python-dotenv optional; fall back to shell env
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles

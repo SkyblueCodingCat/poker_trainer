@@ -1,6 +1,7 @@
 fastapi>=0.110
 uvicorn[standard]>=0.27
 pydantic>=2.5
+python-dotenv>=1.0
 
 # LLM provider — install ONE of these depending on which backend you use.
 # (Both can coexist; the LLM_PROVIDER env var picks at runtime.)
