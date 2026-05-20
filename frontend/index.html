@@ -12,6 +12,7 @@
   <header class="top-bar">
     <div class="brand">♠ 德州扑克训练场 <span class="sub">3 人桌 · 100bb · 对战 AI</span></div>
     <div class="top-actions">
+      <button id="btn-history" class="ghost">📚 历史</button>
       <button id="btn-stats" class="ghost">📊 数据</button>
       <button id="btn-new-game" class="ghost">重开一局</button>
       <button id="btn-next-hand" class="primary" disabled>下一手 →</button>
@@ -104,6 +105,16 @@
     </aside>
   </main>
 
+  <!-- history modal -->
+  <div class="modal hidden" id="history-modal">
+    <div class="modal-content history-modal">
+      <button class="modal-close" id="btn-close-history" title="关闭" aria-label="关闭">×</button>
+      <h2>历史会话</h2>
+      <p class="history-hint">每次「重开一局」=一个会话。可以查看数据、接着玩、或删除（含确认）。</p>
+      <div class="history-list" id="history-list"></div>
+    </div>
+  </div>
+
   <!-- new game / opponent picker modal -->
   <div class="modal hidden" id="newgame-modal">
     <div class="modal-content newgame-modal">
@@ -137,6 +148,7 @@
       <div class="stats-session-bar">
         <label for="session-select">查看哪一局：</label>
         <select id="session-select"></select>
+        <span class="stats-session-hint">管理 / 接着玩 / 删除请用顶部 📚 历史</span>
       </div>
       <div class="stats-charts" id="stats-charts"></div>
       <div class="stats-body" id="stats-body"></div>

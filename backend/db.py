@@ -148,6 +148,37 @@ def get_session(session_id: int) -> Optional[dict]:
     return d
 
 
+def delete_session(session_id: int) -> bool:
+    """Delete a session and all its hands/actions/coach_notes (cascades).
+    Returns True if a row was deleted."""
+    with _lock:
+        # FK ON DELETE CASCADE handles hands → actions/coach_notes
+        cur = _conn.execute("DELETE FROM hands WHERE session_id = ?", (session_id,))
+        cur2 = _conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        _conn.commit()
+        return cur2.rowcount > 0
+
+
+def last_hand_ending_stacks(session_id: int) -> Optional[dict]:
+    """Return {name: ending_stack} from the latest completed hand of `session_id`,
+    or None if the session has no hands. Also returns the latest hand_number and
+    button seat to drive 'continue' logic."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT hand_number, button_seat, seats FROM hands "
+            "WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+    if not row:
+        return None
+    seats = json.loads(row["seats"])
+    return {
+        "hand_number": row["hand_number"],
+        "button_seat": row["button_seat"],
+        "seats": seats,  # list of dicts with seat, name, personality, ending_stack, ...
+    }
+
+
 # ---------- hands + actions ----------
 
 def insert_hand_and_actions(

@@ -509,6 +509,15 @@ button.ghost { background: transparent; border: 1px solid #555; }
   cursor: pointer;
 }
 .stats-session-bar select:hover { border-color: var(--gold); }
+.stats-session-hint {
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  opacity: .7;
+}
+@media (max-width: 700px) {
+  .stats-session-hint { display: none; }
+}
 .stats-body {
   display: flex;
   flex-direction: column;
@@ -666,6 +675,87 @@ button.ghost { background: transparent; border: 1px solid #555; }
 
 @media (max-width: 700px) {
   .stats-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* ===== history modal ===== */
+.history-modal {
+  width: min(720px, 95%);
+}
+.history-hint {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-bottom: 14px;
+}
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.history-card {
+  background: var(--panel-light);
+  border-radius: 8px;
+  padding: 12px 14px;
+  border-left: 3px solid #555;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+.history-card.current { border-left-color: var(--good); }
+.history-card.empty   { border-left-color: #555; opacity: .65; }
+.history-card.busted  { border-left-color: var(--danger); }
+
+.history-card .hc-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;        /* let inner text truncate */
+}
+.history-card .hc-title {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.history-card .hc-title .hc-id { color: var(--gold); }
+.history-card .hc-title .hc-current-tag {
+  font-size: 10px;
+  background: var(--good);
+  color: #000;
+  padding: 1px 6px;
+  border-radius: 8px;
+  letter-spacing: .05em;
+}
+.history-card .hc-row {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.history-card .hc-row .hc-pos { color: var(--good); }
+.history-card .hc-row .hc-neg { color: var(--danger); }
+.history-card .hc-stacks {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.history-card .hc-stacks span {
+  background: rgba(0,0,0,.3);
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-right: 6px;
+}
+.history-card .hc-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.history-card .hc-actions button {
+  padding: 5px 12px;
+  font-size: 11px;
+  min-width: 80px;
 }
 
 /* ===== new game / opponent picker ===== */

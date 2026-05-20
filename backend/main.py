@@ -362,7 +362,94 @@ def get_stats(session_id: Optional[int] = None):
 
 @app.get("/api/sessions")
 def list_sessions():
-    return {"sessions": db.list_sessions(), "current": _session_id}
+    sessions = db.list_sessions()
+    # enrich each with the last hand's ending stacks so the UI can show
+    # "resume with You=$X, Stone=$Y" and disable resume if all busted
+    for s in sessions:
+        last = db.last_hand_ending_stacks(s["id"])
+        if last:
+            s["last_stacks"] = {
+                seat["name"]: seat["ending_stack"] for seat in last["seats"]
+            }
+            s["last_button_seat"] = last["button_seat"]
+            s["last_hand_number"] = last["hand_number"]
+        else:
+            s["last_stacks"] = None
+            s["last_button_seat"] = None
+            s["last_hand_number"] = 0
+    return {"sessions": sessions, "current": _session_id}
+
+
+@app.delete("/api/sessions/{session_id}")
+def delete_session(session_id: int):
+    """Delete a session and all its data. Refuse if it's the live one."""
+    with _lock:
+        if session_id == _session_id and _state is not None:
+            raise HTTPException(400, "不能删除当前正在进行的会话；先开始一个新局再删除")
+    ok = db.delete_session(session_id)
+    if not ok:
+        raise HTTPException(404, "session not found")
+    return {"deleted": session_id}
+
+
+@app.post("/api/sessions/{session_id}/resume")
+def resume_session(session_id: int):
+    """Continue a previous session: open a new hand using its last ending
+    stacks and rotate the button. The opponent personalities are taken from
+    the saved session record."""
+    global _state, _button, _starting_stacks, _opponent_personalities
+    global _session_id, _hand_started_at, _stats
+    with _lock:
+        if _state is not None and _state.street != Street.HAND_OVER:
+            raise HTTPException(400, "当前正在打牌中，先打完这一手再切换会话")
+
+        sess = db.get_session(session_id)
+        if not sess:
+            raise HTTPException(404, "session not found")
+        last = db.last_hand_ending_stacks(session_id)
+
+        # opponents come from the saved session
+        _opponent_personalities = list(sess["opponents"])
+
+        # determine starting stacks for the next hand
+        if last is None:
+            # session has no hands yet — start fresh with default stacks
+            stacks = [sess["starting_stack"]] * 3
+            next_button = 0
+            next_hand_number = 1
+        else:
+            # map name → ending_stack
+            by_name = {s["name"]: s["ending_stack"] for s in last["seats"]}
+            # build stacks in seat order matching _make_players (seat 0 = You,
+            # seat 1 = first opponent, seat 2 = second opponent)
+            opp1_name = PERSONALITY_LABELS[_opponent_personalities[0]]["name"]
+            opp2_name = PERSONALITY_LABELS[_opponent_personalities[1]]["name"]
+            stacks = [
+                by_name.get("You", sess["starting_stack"]),
+                by_name.get(opp1_name, sess["starting_stack"]),
+                by_name.get(opp2_name, sess["starting_stack"]),
+            ]
+            if all(s == 0 for s in stacks):
+                raise HTTPException(400, "all players busted in that session")
+            # rotate button forward from last hand's button (skip busted seats)
+            next_button = (last["button_seat"] + 1) % 3
+            while stacks[next_button] == 0:
+                next_button = (next_button + 1) % 3
+            next_hand_number = last["hand_number"] + 1
+
+        _session_id = session_id
+        _button = next_button
+        # rebuild in-memory stats tracker for this session from DB so the data
+        # panel shows full historical stats, not just the new hand
+        _stats = _stats_for_session(session_id)
+
+        players = _make_players(stacks=stacks, opponents=_opponent_personalities)
+        _starting_stacks = [p.stack for p in players]
+        _hand_started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        _state = start_new_hand(
+            players, button=_button, hand_number=next_hand_number, rng=_rng,
+        )
+        return get_state_unlocked()
 
 
 @app.get("/api/coach")

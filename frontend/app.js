@@ -322,6 +322,133 @@ async function loadStatsForSelected() {
   renderStats(data);
 }
 
+// ===== history modal =====
+async function openHistory() {
+  const modal = $("#history-modal");
+  modal.classList.remove("hidden");
+  await renderHistory();
+}
+
+async function renderHistory() {
+  const list = $("#history-list");
+  list.innerHTML = `<div class="chart-empty">加载中…</div>`;
+  let data;
+  try {
+    data = await api("/api/sessions");
+  } catch (e) {
+    list.innerHTML = `<div style="color:var(--danger);font-size:13px;padding:20px;">加载失败: ${e.message}</div>`;
+    return;
+  }
+  const sessions = data.sessions || [];
+  const current = data.current;
+
+  if (sessions.length === 0) {
+    list.innerHTML = `<div class="chart-empty">还没有历史会话。点「重开一局」开始第一局。</div>`;
+    return;
+  }
+
+  list.innerHTML = "";
+  sessions.forEach(s => list.appendChild(renderHistoryCard(s, current)));
+}
+
+function renderHistoryCard(s, current) {
+  const card = document.createElement("div");
+  card.className = "history-card";
+  if (s.id === current) card.classList.add("current");
+  if (s.hand_count === 0) card.classList.add("empty");
+
+  const stacks = s.last_stacks;
+  const allBusted = stacks && Object.values(stacks).every(v => v === 0);
+  if (allBusted) card.classList.add("busted");
+
+  // header line
+  const date = new Date(s.started_at).toLocaleString("zh-CN", { hour12: false });
+  const opps = (s.opponents || []).join(" + ");
+  const chips = s.you_chips_won;
+  const sign = chips > 0 ? "+" : "";
+  const chipsClass = chips > 0 ? "hc-pos" : chips < 0 ? "hc-neg" : "";
+
+  const isCurrent = s.id === current ? `<span class="hc-current-tag">当前</span>` : "";
+
+  let stacksLine = "";
+  if (stacks) {
+    stacksLine = `<div class="hc-stacks">最后筹码：` +
+      Object.entries(stacks).map(([n, v]) => `<span>${n} $${v}</span>`).join("") +
+      `</div>`;
+  } else {
+    stacksLine = `<div class="hc-stacks" style="font-style:italic;">尚未打过手牌</div>`;
+  }
+
+  card.innerHTML = `
+    <div class="hc-meta">
+      <div class="hc-title">
+        <span class="hc-id">#${s.id}</span>
+        <span>${opps}</span>
+        ${isCurrent}
+      </div>
+      <div class="hc-row">
+        ${date} · ${s.hand_count} 手 ·
+        <span class="${chipsClass}">${sign}$${chips}</span>
+      </div>
+      ${stacksLine}
+    </div>
+    <div class="hc-actions">
+      <button class="hc-view ghost">查看数据</button>
+      <button class="hc-resume primary" ${allBusted || s.id === current ? "disabled" : ""}>接着玩</button>
+      <button class="hc-delete danger" ${s.id === current ? "disabled" : ""}>删除</button>
+    </div>
+  `;
+
+  card.querySelector(".hc-view").addEventListener("click", () => {
+    $("#history-modal").classList.add("hidden");
+    openStatsForSession(s.id);
+  });
+  card.querySelector(".hc-resume").addEventListener("click", () => resumeSession(s));
+  card.querySelector(".hc-delete").addEventListener("click", () => deleteSessionFlow(s));
+
+  return card;
+}
+
+async function openStatsForSession(sessionId) {
+  await openStats();
+  const sel = $("#session-select");
+  sel.value = String(sessionId);
+  await loadStatsForSelected();
+}
+
+async function resumeSession(s) {
+  const opps = (s.opponents || []).join(" + ");
+  const stacksStr = s.last_stacks
+    ? Object.entries(s.last_stacks).map(([n, v]) => `${n} $${v}`).join(", ")
+    : `各人 $${s.starting_stack}`;
+  const ok = confirm(
+    `从会话 #${s.id}（${opps}）继续？\n\n下一手起始筹码：\n${stacksStr}\n\n（当前正在打的牌局如果有，会先终止）`
+  );
+  if (!ok) return;
+  try {
+    state = await api(`/api/sessions/${s.id}/resume`, { method: "POST" });
+    $("#history-modal").classList.add("hidden");
+    render();
+    driveAI();
+  } catch (e) {
+    alert("接着玩失败: " + e.message);
+  }
+}
+
+async function deleteSessionFlow(s) {
+  const opps = (s.opponents || []).join(" + ");
+  const ok = confirm(
+    `删除会话 #${s.id}（${opps}，${s.hand_count} 手）？\n\n这一会话的所有手牌、动作、教练复盘都会被永久删除，不可恢复。`
+  );
+  if (!ok) return;
+  try {
+    await api(`/api/sessions/${s.id}`, { method: "DELETE" });
+    await renderHistory();
+  } catch (e) {
+    alert("删除失败: " + e.message);
+  }
+}
+
 function renderStats(data) {
   const players = data.players || [];
   const meta = $("#stats-meta");
@@ -789,6 +916,8 @@ $("#btn-confirm-newgame").addEventListener("click", () => {
 $("#btn-next-hand").addEventListener("click", nextHand);
 $("#btn-stats").addEventListener("click", openStats);
 $("#btn-close-stats").addEventListener("click", () => $("#stats-modal").classList.add("hidden"));
+$("#btn-history").addEventListener("click", openHistory);
+$("#btn-close-history").addEventListener("click", () => $("#history-modal").classList.add("hidden"));
 $("#session-select").addEventListener("change", () => {
   loadStatsForSelected().catch(e => console.error("session switch failed", e));
 });
