@@ -124,8 +124,14 @@ preflop range、postflop 倾向、sizing 偏好、典型台词。重开一局可
 ---
 
 ## 截图（占位）
+<img width="1509" height="857" alt="image" src="https://github.com/user-attachments/assets/8df272bb-782c-4d8e-8746-6dd342a3a04f" />
+<img width="1511" height="856" alt="image" src="https://github.com/user-attachments/assets/d566263e-f230-4979-bc5c-df2a7fbe5342" />
+<img width="1511" height="857" alt="image" src="https://github.com/user-attachments/assets/b60a6657-7a78-402b-becf-c80c711b8da0" />
+<img width="1512" height="855" alt="image" src="https://github.com/user-attachments/assets/621c69d7-9f9e-440e-9af6-c36162dca50f" />
+<img width="1512" height="856" alt="image" src="https://github.com/user-attachments/assets/63e18e06-9452-46f0-a96d-9e6675c390a4" />
+<img width="1512" height="855" alt="image" src="https://github.com/user-attachments/assets/7ede42d7-d3b2-4e30-b2f0-0e6088534ee0" />
 
-> *截图待补。运行后浏览器进 `http://localhost:8765/` 体验。建议先打 5 手感受 Stone 和 Goldfish
+> 运行后浏览器进 `http://localhost:8765/` 体验。建议先打 5 手感受 Stone 和 Goldfish
 > 的风格差异，再切到 Shark + Wolf 体验 GTO vs LAG 的压力对抗。*
 
 ---
