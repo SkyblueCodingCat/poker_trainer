@@ -33,6 +33,13 @@ Thumbs.db
 *.log
 /tmp/poker.log
 
+# Local SQLite data
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 # Cache
 .pytest_cache/
 .mypy_cache/

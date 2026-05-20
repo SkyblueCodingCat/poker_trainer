@@ -6,6 +6,13 @@ into session totals.
 
 All stats are tracked as (numerator, denominator) pairs so they compose
 across hands by simple addition.
+
+The inference function is type-agnostic — it only reads .players, .history,
+.board, .revealed_cards. So we have two entry points:
+  - compute_hand_stats(GameState, ...): live path, called when a hand ends.
+  - compute_hand_stats_from_record(hand_dict, actions_list): replay path,
+    called when reconstructing stats from the SQLite DB.
+The replay path uses _StateView shims to look like a GameState.
 """
 from __future__ import annotations
 
@@ -254,3 +261,82 @@ def _safe_pct(num: int, den: int) -> float | None:
     if den == 0:
         return None
     return round(100.0 * num / den, 1)
+
+
+# ===== replay path: reconstruct stats from DB records =====
+
+@dataclass
+class _PlayerView:
+    name: str
+    personality: str
+    stack: int  # = ending_stack (for chips_won calc compatibility)
+
+
+@dataclass
+class _ActionView:
+    seat: int
+    name: str
+    street: Street
+    action: str
+
+
+@dataclass
+class _StateView:
+    """Looks like just enough of GameState that compute_hand_stats can chew it."""
+    players: list
+    history: list
+    board: list
+    revealed_cards: dict
+
+
+def compute_hand_stats_from_record(hand: dict, actions: list[dict]) -> List[PlayerHandStats]:
+    """Reconstruct per-player stats contribution from a DB hand record.
+
+    `hand` is a row from the `hands` table (with `seats` and `winners` already
+    JSON-decoded). `actions` is the matching list from the `actions` table.
+    """
+    # Build players in seat order. The DB stores seats as a list of dicts
+    # with {seat, name, personality, hole_cards, starting_stack, ending_stack, chips_won}.
+    seats_sorted = sorted(hand["seats"], key=lambda s: s["seat"])
+    players = [
+        _PlayerView(
+            name=s["name"],
+            personality=s["personality"] or "human",
+            stack=s["ending_stack"],
+        )
+        for s in seats_sorted
+    ]
+    starting_stacks = [s["starting_stack"] for s in seats_sorted]
+
+    # Build history with Street enum
+    history = []
+    for a in actions:
+        try:
+            street = Street(a["street"])
+        except ValueError:
+            continue  # unknown street tag
+        history.append(_ActionView(
+            seat=a["seat"], name=a["name"], street=street, action=a["action"],
+        ))
+
+    # Revealed cards: any seat in the showdown (those with non-empty hole_cards
+    # at hand end AND not folded — we approximate by "has hole_cards in seats AND
+    # is in winners or made it to showdown"). Simpler: replay state.revealed_cards
+    # is set when there was a showdown — we infer from board length + non-folded
+    # players. The action history tells us who folded.
+    folded_seats = {a["seat"] for a in actions if a["action"] == "fold"}
+    non_folded = {s["seat"] for s in seats_sorted if s["seat"] not in folded_seats}
+    revealed = {}
+    if len(non_folded) >= 2 and hand["board"] and len(hand["board"]) >= 3:
+        # genuine showdown
+        for s in seats_sorted:
+            if s["seat"] in non_folded and s.get("hole_cards"):
+                revealed[s["seat"]] = s["hole_cards"]
+
+    state = _StateView(
+        players=players,
+        history=history,
+        board=hand["board"] or [],
+        revealed_cards=revealed,
+    )
+    return compute_hand_stats(state, starting_stacks)

@@ -129,9 +129,14 @@
   <!-- stats modal -->
   <div class="modal hidden" id="stats-modal">
     <div class="modal-content stats-modal">
+      <button class="modal-close" id="btn-close-stats" title="关闭" aria-label="关闭">×</button>
       <div class="stats-header">
         <h2>数据面板</h2>
         <div class="stats-meta" id="stats-meta"></div>
+      </div>
+      <div class="stats-session-bar">
+        <label for="session-select">查看哪一局：</label>
+        <select id="session-select"></select>
       </div>
       <div class="stats-charts" id="stats-charts"></div>
       <div class="stats-body" id="stats-body"></div>
@@ -149,23 +154,21 @@
           </ul>
         </details>
       </div>
-      <div class="modal-actions">
-        <button id="btn-close-stats" class="ghost">关闭</button>
-      </div>
     </div>
   </div>
 
-  <!-- coach review modal -->
-  <div class="modal hidden" id="coach-modal">
-    <div class="modal-content">
-      <h2>本手复盘</h2>
+  <!-- review panel (左下角常驻，hand_over 时自动显示) -->
+  <div class="review-panel hidden" id="review-panel">
+    <div class="review-header" id="review-header">
+      <span class="review-title">📋 <span id="review-title-text">上一手</span></span>
+      <button class="review-toggle" id="review-toggle" title="折叠/展开">−</button>
+    </div>
+    <div class="review-body" id="review-body">
       <div class="reveal" id="reveal-cards"></div>
       <div class="winners" id="winners-list"></div>
-      <hr>
-      <div class="coach-note" id="coach-note">点击下方「请教练复盘」让教练 AI 针对你这手的关键决策给出针对性分析。</div>
-      <div class="modal-actions">
-        <button id="btn-coach" class="primary">请教练复盘</button>
-        <button id="btn-close-modal" class="ghost">关闭</button>
+      <div class="coach-section">
+        <button id="btn-coach" class="primary review-coach-btn">请教练复盘</button>
+        <div class="coach-note hidden" id="coach-note"></div>
       </div>
     </div>
   </div>

@@ -132,11 +132,12 @@ function render() {
   // action bar
   renderActionBar();
 
-  // hand-over modal
+  // hand-over: show review panel (左下角常驻面板，取代弹窗)
   if (state.street === "hand_over") {
-    showHandOverModal();
+    updateReviewPanel();
     $("#btn-next-hand").disabled = false;
   } else {
+    hideReviewPanel();
     $("#btn-next-hand").disabled = true;
   }
 }
@@ -211,18 +212,33 @@ function renderActionBar() {
   }
 }
 
-// ===== modal / hand over =====
-function showHandOverModal() {
-  const m = $("#coach-modal");
-  if (!m.classList.contains("hidden")) return; // already showing
-  m.classList.remove("hidden");
+// ===== review panel (左下角常驻) =====
+let _lastReviewedHand = -1;
 
-  // reveal
+function updateReviewPanel() {
+  const panel = $("#review-panel");
+  panel.classList.remove("hidden");
+  // 新一手结束时重置教练区，并保持展开
+  const isNewHand = state.hand_number !== _lastReviewedHand;
+  if (isNewHand) {
+    _lastReviewedHand = state.hand_number;
+    panel.classList.remove("collapsed");
+    $("#review-toggle").textContent = "−";
+    const note = $("#coach-note");
+    note.textContent = "";
+    note.classList.add("hidden");
+    $("#btn-coach").disabled = false;
+    $("#btn-coach").textContent = "请教练复盘";
+  }
+
+  $("#review-title-text").textContent = `第 ${state.hand_number} 手 · 已结束`;
+
   const reveal = $("#reveal-cards");
-  reveal.innerHTML = "<h3 style='font-size:13px;color:var(--text-dim);margin-bottom:6px;'>摊牌底牌</h3>";
+  reveal.innerHTML = "";
+  let anyShown = false;
   state.players.forEach(p => {
-    if (p.folded) return;
-    if (!p.hole_cards) return;
+    if (p.folded || !p.hole_cards) return;
+    anyShown = true;
     const row = document.createElement("div");
     row.className = "reveal-row";
     const nm = document.createElement("div");
@@ -234,16 +250,23 @@ function showHandOverModal() {
     row.append(nm, cards);
     reveal.appendChild(row);
   });
+  if (!anyShown) {
+    reveal.innerHTML = `<div style="font-size:11px;color:var(--text-dim);">对手 preflop 弃牌，无摊牌</div>`;
+  }
 
-  // winners
   const w = $("#winners-list");
   w.innerHTML = (state.winners || []).map(x => `🏆 ${x.reason}`).join("<br>");
-
-  $("#coach-note").textContent = "点击下方「请教练复盘」让教练 AI 针对你这手的关键决策给出针对性分析。";
-  $("#btn-coach").disabled = false;
 }
 
-function hideModal() { $("#coach-modal").classList.add("hidden"); }
+function hideReviewPanel() {
+  $("#review-panel").classList.add("hidden");
+}
+
+function toggleReviewPanel() {
+  const panel = $("#review-panel");
+  panel.classList.toggle("collapsed");
+  $("#review-toggle").textContent = panel.classList.contains("collapsed") ? "+" : "−";
+}
 
 // ===== stats modal =====
 async function openStats() {
@@ -252,11 +275,51 @@ async function openStats() {
   const body = $("#stats-body");
   body.innerHTML = "<div style='color:var(--text-dim);font-size:13px;'>加载中…</div>";
   try {
-    const data = await api("/api/stats");
-    renderStats(data);
+    // 先拉 sessions 填下拉框，再拉默认 session 的 stats
+    await populateSessionSelect();
+    await loadStatsForSelected();
   } catch (e) {
     body.innerHTML = `<div style="color:var(--danger);">加载失败: ${e.message}</div>`;
   }
+}
+
+async function populateSessionSelect() {
+  const sel = $("#session-select");
+  const data = await api("/api/sessions");
+  const sessions = data.sessions || [];
+  const current = data.current;
+  sel.innerHTML = "";
+
+  if (sessions.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = ""; opt.textContent = "（尚无对局，先打一手）";
+    opt.disabled = true; opt.selected = true;
+    sel.appendChild(opt);
+    return;
+  }
+
+  sessions.forEach(s => {
+    const opt = document.createElement("option");
+    opt.value = s.id;
+    const date = new Date(s.started_at).toLocaleString("zh-CN", { hour12: false });
+    const opps = (s.opponents || []).join(" + ");
+    const chips = s.you_chips_won;
+    const sign = chips > 0 ? "+" : "";
+    const isCurrent = s.id === current ? " · 当前" : "";
+    opt.textContent = `#${s.id} · ${date} · ${opps} · ${s.hand_count} 手 · ${sign}$${chips}${isCurrent}`;
+    if (s.id === current) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  // default to the topmost (most recent) if no current
+  if (current == null && sel.options.length > 0) sel.options[0].selected = true;
+}
+
+async function loadStatsForSelected() {
+  const sel = $("#session-select");
+  const sid = sel.value;
+  const url = sid ? `/api/stats?session_id=${sid}` : "/api/stats";
+  const data = await api(url);
+  renderStats(data);
 }
 
 function renderStats(data) {
@@ -522,7 +585,7 @@ async function refresh() {
 }
 
 async function newGame(opponents) {
-  hideModal();
+  hideReviewPanel();
   state = await api("/api/new-game", {
     method: "POST",
     body: opponents ? { opponents } : null,
@@ -584,7 +647,7 @@ function makeOption(p, slot) {
 }
 
 async function nextHand() {
-  hideModal();
+  hideReviewPanel();
   state = await api("/api/new-hand", { method: "POST" });
   render();
   driveAI();
@@ -724,17 +787,35 @@ $("#btn-confirm-newgame").addEventListener("click", () => {
   newGame([_pickedSeat1, _pickedSeat2]);
 });
 $("#btn-next-hand").addEventListener("click", nextHand);
-$("#btn-close-modal").addEventListener("click", hideModal);
 $("#btn-stats").addEventListener("click", openStats);
 $("#btn-close-stats").addEventListener("click", () => $("#stats-modal").classList.add("hidden"));
+$("#session-select").addEventListener("change", () => {
+  loadStatsForSelected().catch(e => console.error("session switch failed", e));
+});
+
+// review panel: 整个 header 都可点折叠
+$("#review-header").addEventListener("click", e => {
+  // 别让 toggle 按钮的点击冒泡过来又翻一次
+  if (e.target.closest(".review-toggle")) return;
+  toggleReviewPanel();
+});
+$("#review-toggle").addEventListener("click", toggleReviewPanel);
+
 $("#btn-coach").addEventListener("click", async () => {
-  $("#btn-coach").disabled = true;
-  $("#coach-note").textContent = "教练复盘中…";
+  const btn = $("#btn-coach");
+  const note = $("#coach-note");
+  btn.disabled = true;
+  btn.textContent = "教练复盘中…";
+  note.classList.remove("hidden");
+  note.textContent = "教练复盘中…";
   try {
     const r = await api("/api/coach");
-    $("#coach-note").textContent = r.note;
+    note.textContent = r.note;
+    btn.textContent = "已复盘";
   } catch (e) {
-    $("#coach-note").textContent = "复盘失败: " + e.message;
+    note.textContent = "复盘失败: " + e.message;
+    btn.disabled = false;
+    btn.textContent = "请教练复盘";
   }
 });
 

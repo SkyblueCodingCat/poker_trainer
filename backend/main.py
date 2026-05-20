@@ -15,6 +15,7 @@ import asyncio
 import os
 import random
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -32,15 +33,18 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import ai_player
+import db
 from game import (
     GameState, Player, Street, apply_action, legal_actions, start_new_hand, view_for,
 )
 from personalities import PERSONALITIES, PERSONALITY_LABELS
-from stats import StatsTracker, compute_hand_stats
+from stats import StatsTracker, compute_hand_stats, compute_hand_stats_from_record
 
 
 HERE = Path(__file__).resolve().parent
 FRONTEND = HERE.parent / "frontend"
+DATA_DIR = HERE.parent / "data"
+DB_PATH = DATA_DIR / "poker.db"
 
 app = FastAPI(title="Poker Trainer")
 
@@ -51,9 +55,31 @@ _state: Optional[GameState] = None
 _button: int = 0
 _rng = random.Random()
 _starting_stacks: list[int] = []  # stacks at the start of the current hand (before blinds)
+_starting_stack_amount: int = 200
 _stats = StatsTracker()
 _opponent_personalities: list[str] = ["nit", "gto"]  # current 2 opponents (seats 1, 2)
+_session_id: Optional[int] = None  # current DB session id
+_hand_started_at: Optional[str] = None  # ISO timestamp captured when hand begins
 HUMAN_SEAT = 0
+
+
+# ---- DB init ----
+
+@app.on_event("startup")
+def on_startup():
+    db.init(DB_PATH)
+
+
+def _stats_for_session(session_id: int) -> StatsTracker:
+    """Build a fresh StatsTracker by replaying all hands in `session_id`."""
+    tracker = StatsTracker()
+    for hand, actions in db.all_hands_with_actions(session_id=session_id):
+        try:
+            hand_stats = compute_hand_stats_from_record(hand, actions)
+            tracker.record_hand(hand_stats)
+        except Exception as e:
+            print(f"[stats replay] skipping hand {hand.get('id')}: {e!r}")
+    return tracker
 
 
 def _make_players(stacks: Optional[list[int]] = None,
@@ -79,29 +105,76 @@ def _make_players(stacks: Optional[list[int]] = None,
 
 
 def _ensure_state():
-    global _state, _button, _starting_stacks
+    global _state, _button, _starting_stacks, _hand_started_at, _session_id
     if _state is None:
+        # First hand of a fresh process — make sure a session exists in DB.
+        if _session_id is None:
+            _session_id = db.create_session(
+                opponents=list(_opponent_personalities),
+                small_blind=1,
+                big_blind=2,
+                starting_stack=_starting_stack_amount,
+            )
         players = _make_players()
         _starting_stacks = [p.stack for p in players]
+        _hand_started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         _state = start_new_hand(players, button=_button, hand_number=1, rng=_rng)
 
 
 def _maybe_record_hand() -> None:
-    """If the current hand just ended, record stats once."""
+    """If the current hand just ended, record stats + persist to DB once."""
     if _state is None:
         return
     if _state.street != Street.HAND_OVER:
         return
     if getattr(_state, "_stats_recorded", False):
         return
-    # but blinds were posted, so player.stack at start was higher than now;
-    # we stored _starting_stacks before posting blinds.
-    # Actually we stored AFTER make_players() = before start_new_hand posts blinds.
-    # Wait — _starting_stacks captures the stacks at the moment of new-hand creation,
-    # which is what compute_hand_stats wants (chips before any forced bets).
+
+    # 1. compute and accumulate stats in memory (drives the live data panel)
     hand_stats = compute_hand_stats(_state, _starting_stacks)
     _stats.record_hand(hand_stats)
     _state.__dict__["_stats_recorded"] = True
+
+    # 2. persist to DB
+    if _session_id is None:
+        return  # shouldn't happen, but be safe
+    seats_payload = [
+        {
+            "seat": i,
+            "name": p.name,
+            "personality": p.personality,
+            "hole_cards": [str(c) for c in p.hole_cards],
+            "starting_stack": _starting_stacks[i],
+            "ending_stack": p.stack,
+            "chips_won": p.stack - _starting_stacks[i],
+        }
+        for i, p in enumerate(_state.players)
+    ]
+    actions_payload = []
+    ai_log = getattr(_state, "_ai_log", {}) or {}
+    for idx, h in enumerate(_state.history):
+        actions_payload.append({
+            "street": h.street.value,
+            "seat": h.seat,
+            "name": h.name,
+            "action": h.action,
+            "amount": h.amount,
+            "to_amount": h.to_amount,
+            "pot_after": h.pot_after,
+            "ai_reasoning": ai_log.get(idx),
+        })
+    hand_id = db.insert_hand_and_actions(
+        session_id=_session_id,
+        hand_number=_state.hand_number,
+        started_at=_hand_started_at or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        button_seat=_state.button,
+        board=[str(c) for c in _state.board],
+        pot=sum(s["chips_won"] for s in seats_payload if s["chips_won"] > 0),
+        winners=_state.winners,
+        seats=seats_payload,
+        actions=actions_payload,
+    )
+    _state.__dict__["_db_hand_id"] = hand_id
 
 
 # ---- request models ----
@@ -120,9 +193,11 @@ class NewGameRequest(BaseModel):
 @app.post("/api/new-game")
 def new_game(req: Optional[NewGameRequest] = None):
     global _state, _button, _starting_stacks, _opponent_personalities
+    global _session_id, _hand_started_at, _stats
     with _lock:
+        # finalize any in-flight hand from the previous session before resetting
+        _maybe_record_hand()
         _button = 0
-        _stats.reset()
         if req and req.opponents:
             if len(req.opponents) != 2:
                 raise HTTPException(400, "must supply exactly 2 opponents")
@@ -130,8 +205,16 @@ def new_game(req: Optional[NewGameRequest] = None):
                 if o not in PERSONALITIES:
                     raise HTTPException(400, f"unknown personality: {o}")
             _opponent_personalities = list(req.opponents)
+        # new DB session
+        _session_id = db.create_session(
+            opponents=list(_opponent_personalities),
+            small_blind=1, big_blind=2, starting_stack=_starting_stack_amount,
+        )
+        # reset in-memory stats so the current panel shows just this session
+        _stats = StatsTracker()
         players = _make_players()
         _starting_stacks = [p.stack for p in players]
+        _hand_started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         _state = start_new_hand(players, button=_button, hand_number=1, rng=_rng)
         return get_state_unlocked()
 
@@ -150,18 +233,16 @@ def list_personalities():
 
 @app.post("/api/new-hand")
 def new_hand():
-    global _state, _button, _starting_stacks
+    global _state, _button, _starting_stacks, _hand_started_at
     with _lock:
         if _state is None:
             _ensure_state()
             return get_state_unlocked()
-        # finalize stats from the prior hand if not yet
+        # finalize + persist the prior hand if not yet
         _maybe_record_hand()
-        # carry stacks forward
         stacks = [p.stack for p in _state.players]
         if all(s == 0 for s in stacks):
             raise HTTPException(400, "all players busted")
-        # rotate button to next seat with chips
         n = len(stacks)
         _button = (_state.button + 1) % n
         while stacks[_button] == 0:
@@ -169,6 +250,7 @@ def new_hand():
         next_hand = (_state.hand_number or 0) + 1
         players = _make_players(stacks)
         _starting_stacks = [p.stack for p in players]
+        _hand_started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         _state = start_new_hand(players, button=_button, hand_number=next_hand, rng=_rng)
         return get_state_unlocked()
 
@@ -260,10 +342,27 @@ async def ai_act():
 
 
 @app.get("/api/stats")
-def get_stats():
+def get_stats(session_id: Optional[int] = None):
+    """Return stats. Default = current live session. With session_id, replay
+    that session from DB (read-only)."""
     with _lock:
         bb = _state.big_blind if _state else 2
-        return _stats.snapshot(big_blind=bb)
+        if session_id is None or session_id == _session_id:
+            payload = _stats.snapshot(big_blind=bb)
+            payload["session_id"] = _session_id
+            return payload
+    # replay outside the lock — the DB has its own lock
+    tracker = _stats_for_session(session_id)
+    sess = db.get_session(session_id)
+    bb = sess["big_blind"] if sess else 2
+    payload = tracker.snapshot(big_blind=bb)
+    payload["session_id"] = session_id
+    return payload
+
+
+@app.get("/api/sessions")
+def list_sessions():
+    return {"sessions": db.list_sessions(), "current": _session_id}
 
 
 @app.get("/api/coach")
@@ -271,13 +370,25 @@ async def coach():
     with _lock:
         if _state is None or _state.street != Street.HAND_OVER:
             raise HTTPException(400, "no completed hand to review")
+        # if we already cached a note for this hand, return it
+        hand_id = getattr(_state, "_db_hand_id", None)
+        if hand_id is not None:
+            cached = db.get_coach_note(hand_id)
+            if cached:
+                return {"note": cached, "cached": True}
         if not _state.revealed_cards:
-            # uncontested win — minimal review
-            return {"note": "这手没有走到摊牌——对手在翻牌前或下注早期就弃牌了，你没有真正的关键决策点可以深入复盘。\n\n小提示：如果你这手是开局加注偷盲成功，那是好事；如果你是被偷盲后弃掉了 BB，可以观察一下哪些位置/对手在频繁偷你，下手考虑做 3-bet defend。"}
+            # uncontested win — minimal review (still cache to avoid re-asking)
+            note = "这手没有走到摊牌——对手在翻牌前或下注早期就弃牌了，你没有真正的关键决策点可以深入复盘。\n\n小提示：如果你这手是开局加注偷盲成功，那是好事；如果你是被偷盲后弃掉了 BB，可以观察一下哪些位置/对手在频繁偷你，下手考虑做 3-bet defend。"
+            if hand_id is not None:
+                db.save_coach_note(hand_id, note)
+            return {"note": note}
         snapshot = _state
     note = await asyncio.to_thread(ai_player.coach_review, snapshot, HUMAN_SEAT)
     with _lock:
         _state.coach_note = note
+        hand_id = getattr(_state, "_db_hand_id", None)
+        if hand_id is not None:
+            db.save_coach_note(hand_id, note)
     return {"note": note}
 
 
