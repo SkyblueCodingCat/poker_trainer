@@ -123,7 +123,7 @@ preflop range、postflop 倾向、sizing 偏好、典型台词。重开一局可
 
 ---
 
-## 截图（占位）
+## 截图
 <img width="1509" height="857" alt="image" src="https://github.com/user-attachments/assets/8df272bb-782c-4d8e-8746-6dd342a3a04f" />
 <img width="1511" height="856" alt="image" src="https://github.com/user-attachments/assets/d566263e-f230-4979-bc5c-df2a7fbe5342" />
 <img width="1511" height="857" alt="image" src="https://github.com/user-attachments/assets/b60a6657-7a78-402b-becf-c80c711b8da0" />
