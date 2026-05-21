@@ -463,9 +463,20 @@ async def coach():
             cached = db.get_coach_note(hand_id)
             if cached:
                 return {"note": cached, "cached": True}
-        if not _state.revealed_cards:
-            # uncontested win — minimal review (still cache to avoid re-asking)
-            note = "这手没有走到摊牌——对手在翻牌前或下注早期就弃牌了，你没有真正的关键决策点可以深入复盘。\n\n小提示：如果你这手是开局加注偷盲成功，那是好事；如果你是被偷盲后弃掉了 BB，可以观察一下哪些位置/对手在频繁偷你，下手考虑做 3-bet defend。"
+
+        # decide whether the student took any voluntary action (anything other
+        # than the forced blind posts). If not, there's genuinely nothing to
+        # coach — keep the placeholder.
+        student_voluntary_actions = [
+            h for h in _state.history
+            if h.seat == HUMAN_SEAT and not h.action.startswith("post-")
+        ]
+        if not student_voluntary_actions:
+            note = (
+                "这手你没有做出任何主动决策——对手在你这一轮之前就把局结束了。\n\n"
+                "比如你 BTN fold 后 SB/BB 之间的对决，或者你 BB 时所有人都 fold 让你直接收下小盲。"
+                "没有可分析的关键点。"
+            )
             if hand_id is not None:
                 db.save_coach_note(hand_id, note)
             return {"note": note}

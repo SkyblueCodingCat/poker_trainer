@@ -164,6 +164,14 @@ def coach_review(state: GameState, human_seat: int) -> str:
 重要：用户消息里会显式给出每位玩家的"最终成牌等级"和组成的 5 张牌。这是引擎算好的 ground truth，
 直接采信，不要自己重新评估手牌等级（这是过去常出错的地方）。
 
+【按场景调整分析重心】
+- 走到摊牌：重心放在 hand strength / value betting / bluff-catching / sizing 等 postflop 主题。
+- 没到摊牌（uncontested 或对手中途弃牌）：对手底牌不可见，不要瞎猜对手具体牌；重心放在
+  preflop range / position / steal 频率 / 3-bet defend / fold equity / c-bet 偷池频率
+  / 弃牌纪律 等概念性主题。
+- preflop 就结束的局：重心放在起手牌选择、位置利用、对手画像（Nit/GTO/LAG/Station）下
+  的偷盲 vs 防守决策。
+
 输出格式（中文叙述，德扑术语保留英文：c-bet / equity / range / pot odds / polarized / TPTK / set / board texture / value / bluff / bluff-catcher / 3-bet / GTO 等）:
 
 【关键决策】<街+动作+利害，1 句话>
@@ -176,27 +184,53 @@ def coach_review(state: GameState, human_seat: int) -> str:
 
     n = len(state.players)
     you = state.players[human_seat]
+    pers_label = {"nit": "Nit 极紧", "gto": "GTO 平衡", "lag": "LAG 松凶", "station": "Station 跟注站"}
+
+    # 怎么结束的：摊牌 / 对手 preflop 弃 / 对手中途弃
+    went_to_showdown = bool(state.revealed_cards)
+    saw_flop = len(state.board) >= 3
+    if went_to_showdown:
+        ending = "走到摊牌"
+    elif saw_flop:
+        ending = "未到摊牌（对手在 flop/turn/river 弃牌）"
+    else:
+        ending = "preflop 就结束（对手 preflop 弃牌或者你 fold 了）"
+
     lines = [f"3-handed NLHE，盲注 ${state.small_blind}/${state.big_blind}，100bb 有效筹码。"]
     lines.append(f"学生是 {you.name}（座位 {human_seat}）。")
+    lines.append(f"本手结束方式：{ending}。")
     lines.append("")
     lines.append("最终状态：")
     lines.append(f"  公共牌：{' '.join(str(c) for c in state.board) or '（未到翻牌）'}")
-    lines.append("  摊牌时亮出的底牌（已由引擎评估好成牌等级，不要重新猜）：")
-    pers_label = {"nit": "Nit 极紧", "gto": "GTO 平衡", "lag": "LAG 松凶", "station": "Station 跟注站"}
-    for s, cards in state.revealed_cards.items():
-        pl = state.players[s]
+
+    # 对手画像（无论是否摊牌都列，便于教练讨论 range）
+    lines.append("  桌上玩家：")
+    for i, pl in enumerate(state.players):
+        if i == human_seat:
+            continue
         label = pers_label.get(pl.personality, "人类玩家")
-        # ground truth: compute final hand category
-        all_cards = pl.hole_cards + state.board
-        if len(all_cards) >= 5:
-            rank_tuple, best_5 = best_hand(all_cards)
-            cat = HAND_NAME[rank_tuple[0]]
-            best_str = " ".join(str(c) for c in best_5)
-            lines.append(
-                f"    座位 {s} {pl.name}（{label}）：底牌 {' '.join(cards)} → 最终成牌 = {cat} [{best_str}]"
-            )
-        else:
-            lines.append(f"    座位 {s} {pl.name}（{label}）：{' '.join(cards)}")
+        lines.append(f"    座位 {i} {pl.name}（{label}）")
+
+    if went_to_showdown:
+        lines.append("")
+        lines.append("  摊牌时亮出的底牌（已由引擎评估好成牌等级，不要重新猜）：")
+        for s, cards in state.revealed_cards.items():
+            pl = state.players[s]
+            label = pers_label.get(pl.personality, "人类玩家")
+            all_cards = pl.hole_cards + state.board
+            if len(all_cards) >= 5:
+                rank_tuple, best_5 = best_hand(all_cards)
+                cat = HAND_NAME[rank_tuple[0]]
+                best_str = " ".join(str(c) for c in best_5)
+                lines.append(
+                    f"    座位 {s} {pl.name}（{label}）：底牌 {' '.join(cards)} → 最终成牌 = {cat} [{best_str}]"
+                )
+            else:
+                lines.append(f"    座位 {s} {pl.name}（{label}）：{' '.join(cards)}")
+    else:
+        lines.append("")
+        lines.append("  对手底牌：不可见（未到摊牌）。请基于其 personality / 位置 / 行动模式估计 range，"
+                     "不要瞎猜对手的具体两张牌。")
     lines.append("")
     # student final hand category as ground truth
     if len(you.hole_cards) >= 2 and len(you.hole_cards) + len(state.board) >= 5:
